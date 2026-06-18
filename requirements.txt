@@ -21,6 +21,6 @@ openai
 python-dotenv
 
 requests
-
+ddgs
 torch 
 torchvision
