@@ -1,139 +1,123 @@
-# AI Chatbot with LangGraph, Tool Calling & Memory
+# AI Research Assistant (RAG Chatbot)
 
-An AI-powered chatbot built using LangGraph, Streamlit, and OpenRouter. The chatbot supports tool calling, persistent conversation memory using SQLite, web search, stock price retrieval, and mathematical calculations.
+An intelligent AI-powered Research Assistant built using LangGraph, LangChain, Streamlit, and FAISS. The chatbot combines Retrieval-Augmented Generation (RAG) with web search to answer questions accurately using both uploaded documents and live internet information.
+
+---
 
 ## Features
 
-* Conversational AI powered by OpenRouter LLMs
-* LangGraph workflow orchestration
-* Persistent memory using SQLite Checkpointer
-* Tool Calling support
-* DuckDuckGo Web Search Tool
-* Stock Price Retrieval Tool
-* Calculator Tool
-* Multi-thread conversation support
-* Streamlit-based user interface
-* Streaming responses
+- Upload PDF documents for question answering
+- Retrieval-Augmented Generation (RAG) using FAISS
+- Automatic web search for recent or unavailable information
+- LangGraph-based agent workflow
+- Conversational chat interface built with Streamlit
+- Chat history support
+- Semantic document retrieval using vector embeddings
+- Environment variable support with `.env`
+
+---
 
 ## Tech Stack
 
-### Backend
+### Programming Language
+- Python
 
-* Python
-* LangGraph
-* LangChain
-* OpenRouter
-* SQLite
+### AI Frameworks
+- LangGraph
+- LangChain
+
+### Large Language Model
+- Configurable LLM (currently Google Gemini)
+
+### Retrieval-Augmented Generation
+- FAISS
+- PyPDFLoader
+- Recursive Character Text Splitter
+- HuggingFace Embeddings
 
 ### Frontend
+- Streamlit
 
-* Streamlit
+### Utilities
+- SQLite
+- DuckDuckGo Search
+- Python Dotenv
 
-### Tools
+---
 
-* DuckDuckGo Search
-* Alpha Vantage Stock API
-* Custom Calculator Tool
-
-## Project Structure
-
-```text
-Chatbot_LangGraph/
-│
-├── backend.py
-├── frontend.py
-├── requirements.txt
-├── chatbot.db
-├── .env
-└── README.md
-```
-
-## Workflow
+## Architecture
 
 ```text
-START
-  │
-  ▼
-chat_node
-  │
-  ├── No Tool Required ─────► END
-  │
-  └── Tool Required
-          │
-          ▼
-        tools
-          │
-          ▼
-      chat_node
-          │
-          ▼
-         END
+                User Query
+                     │
+                     ▼
+              LangGraph Agent
+                     │
+      ┌──────────────┴──────────────┐
+      │                             │
+      ▼                             ▼
+Retrieve from PDFs           Search the Web
+      │                             │
+      └──────────────┬──────────────┘
+                     ▼
+             Large Language Model
+                     ▼
+              Final Response
 ```
 
-## Supported Tools
+---
 
-### Calculator Tool
+## Installation
 
-Performs:
+...
 
-* Addition
-* Subtraction
-* Multiplication
-* Division
+---
 
-Example:
+## Environment Variables
 
-```text
-What is 45 multiplied by 16?
+```env
+GOOGLE_API_KEY=your_api_key
 ```
 
-### Stock Price Tool
+---
 
-Fetches latest stock prices using Alpha Vantage API.
+## Running the Application
 
-Example:
-
-```text
-What is the stock price of INFY?
+```bash
+streamlit run frontend.py
 ```
 
-### Web Search Tool
-
-Searches the internet using DuckDuckGo.
-
-Example:
-
-```text
-Who is the current Prime Minister of India?
-```
-
-## Memory System
-
-The chatbot uses SQLite Checkpointer for persistent memory.
-
-Features:
-
-* Conversation history persistence
-* Multi-thread support
-* Session restoration
-* Long-running conversations
+---
 
 ## Future Improvements
 
-* RAG Integration
-* PDF Chat Support
-* Vector Database Integration
-* Multi-Agent Workflows
-* Conversation Summarization
-* Voice Assistant Support
-* Document Upload & Analysis
+- Support multiple document formats
+- Hybrid search (BM25 + Vector Search)
+- Persistent conversation memory
+- Source citations
+- User authentication
+- Multi-agent workflows
+- Streaming responses
+- Cloud deployment
+
+---
+
+## Learning Outcomes
+
+- Retrieval-Augmented Generation (RAG)
+- LangGraph workflows
+- LangChain tool integration
+- Vector databases with FAISS
+- Semantic search
+- Prompt engineering
+- LLM orchestration
+- Streamlit application development
+- Agent-based AI systems
+
+---
 
 ## Author
 
 Aryan Thakur
 
-Computer Science Engineering Student
-JECRC Foundation
-
-```
-```
+GitHub: https://github.com/aryanthakur5375-coder
