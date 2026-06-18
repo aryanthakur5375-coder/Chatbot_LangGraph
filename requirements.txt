@@ -21,3 +21,6 @@ openai
 python-dotenv
 
 requests
+
+torch 
+torchvision
