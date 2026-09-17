@@ -1,203 +1,628 @@
-# AI Research Assistant — CRAG + Self-RAG
+# 🔎 AI Research Assistant
 
-A lightweight, local-first PDF research assistant built on **Streamlit + LangGraph + FAISS + SQLite + OpenRouter**. It upgrades a simple tool-calling PDF chatbot into an explicit **Corrective RAG (CRAG)** workflow with a **Self-RAG** grounding check, while keeping LLM/token usage to a minimum.
+An AI-powered research assistant built with **Python, LangChain, LangGraph, FAISS, SQLite, Streamlit, and OpenRouter**.
 
-## Overview
+The application combines **Corrective Retrieval-Augmented Generation (CRAG)** with **Self-RAG style answer verification** to improve the reliability of answers generated from user-provided PDF documents.
 
-Ask questions about an uploaded PDF. The assistant retrieves relevant chunks from a FAISS index, grades whether they actually answer the question, and — only if they don't — rewrites the query and falls back to a live web search. The final answer is checked for groundedness and regenerated (at most once) if it isn't well supported.
+It can also fall back to web search when the retrieved document content is not relevant enough to answer the user's question.
 
-## Features
+---
 
-- 📄 PDF upload, chunking, embedding, and FAISS indexing (per conversation thread, multiple PDFs merge into one index)
-- 🧠 **Corrective RAG**: a lightweight LLM call grades retrieved chunks; irrelevant retrieval triggers query rewriting + web search instead of guessing
-- 🔍 Web search fallback (DuckDuckGo) with real source titles/URLs
-- ✅ **Self-RAG** grounding check with a single automatic regeneration if the first answer isn't supported by the context
-- 💬 Multi-turn conversation threads persisted via LangGraph's SQLite checkpointer
-- 🔗 Source citations shown in the UI and preserved across thread reloads
-- 🪪 Clear indication whenever web search was used
-- 🧵 New chat / clear conversation / switch between past threads
-- 🧯 Graceful error handling (missing API key, OpenRouter errors, empty/corrupt PDFs, FAISS failures, web search failures, malformed model output)
-- 🐳 Docker-ready, no secrets baked into the image
+## 🚀 Features
 
-## Architecture — CRAG + Self-RAG workflow
+- 📄 PDF document upload and indexing
+- 🔎 Semantic document retrieval using FAISS
+- 🧠 Corrective RAG (CRAG) workflow
+- ✏️ Automatic query rewriting when retrieved documents are insufficient
+- 🌐 Web-search fallback for missing or irrelevant information
+- ✅ Self-RAG style answer verification
+- 🔁 Controlled answer regeneration when verification fails
+- 💬 Multi-turn conversations
+- 🧵 Persistent conversation threads
+- 💾 SQLite-based LangGraph checkpointing
+- 🤖 OpenRouter LLM integration
+- 🖥️ Streamlit user interface
+- 🐳 Docker support
+- ⚡ CPU-compatible local embeddings
+- 🔐 Environment-variable based API configuration
 
-```
-START
-  |
-  v
-retrieve --(simple greeting? regex, no LLM)-----------------> generate
-  | (FAISS top-k, deterministic)
-  v
-grade_documents --(no docs retrieved? skip LLM, irrelevant)
-  | (1 compact LLM call: {"relevant": true/false})
-  |
-  |-- relevant -------------------------------------> generate
-  |
-  '-- not relevant
-        v
-      rewrite_query (1 short LLM call -> search-optimized query)
-        v
-      web_search (DuckDuckGo, no LLM call, returns titles+URLs)
-        v
-      generate
-            | (1 LLM call, answers from PDF context or web context)
-            |
-            |-- no context at all (plain chit-chat) --------> finalize
-            |
-            '-- has context
-                  v
-                verify -- (1 compact LLM call: {"supported": true/false})
-                  |
-                  |-- supported OR already regenerated ----> finalize
-                  |
-                  '-- not supported
-                        v
-                      regenerate (1 LLM call, stricter grounding prompt)
-                        v
-                      finalize
-                        v
-                       END
+---
+
+# 🏗️ Architecture
+
+The application is implemented as a state-based workflow using **LangGraph**.
+
+### Without a PDF
+
+When no PDF is uploaded, the application does not perform document retrieval.
+
+```text
+User Question
+     ↓
+Direct Answer
+     ↓
+   Finalize
+     ↓
+    END
 ```
 
-**LLM call budget per turn** (this is the core token-optimization strategy):
+This avoids unnecessary retrieval and web-search operations.
 
-| Scenario | LLM calls |
-|---|---|
-| Simple greeting / small talk | 1 (generate only — retrieval, grading, verification all skipped deterministically) |
-| Good PDF match | 2 (grade, generate) |
-| Good PDF match, answer grounded | 3 (grade, generate, verify) |
-| Poor PDF match → web fallback | 4 (grade, rewrite, generate, verify) |
-| Any of the above + one correction | +1 (regenerate), capped — never loops |
+### With a PDF
 
-Retrieval, web search, and the chit-chat check never call the LLM — they're deterministic Python/regex logic, per the project's token-minimization goal.
+When a PDF is available, the question enters the CRAG workflow.
 
-### CRAG (Corrective RAG)
-- `grade_documents` asks the model for nothing more than `{"relevant": true|false}`, built from up to 4 short chunk snippets. If no documents were retrieved at all, this is decided in code with zero LLM calls.
-- Irrelevant retrieval → `rewrite_query` (short, search-optimized rewrite) → `web_search`. Web search is *never* triggered when PDF retrieval already looks good.
-
-### Self-RAG / self-correction
-- `verify` asks for `{"supported": true|false}` comparing the answer against the exact context used to generate it.
-- Skipped entirely (no LLM call) when there's no context to check against, i.e. plain conversational turns.
-- On `false`, `regenerate` re-runs generation once with a stricter grounding prompt. There is **no second verification pass** — this hard caps correction at one cycle and makes an infinite loop structurally impossible.
-
-### Structured output without relying on tool-calling
-Grading and verification ask the model for a single compact JSON object and validate it with a Pydantic model (`RelevanceGrade`, `SupportGrade`) rather than using OpenRouter's function-calling, since tool-calling support is inconsistent across free/open models. Any parsing failure falls back to a safe default instead of crashing the graph.
-
-## Tech stack
-
-Python · Streamlit · LangChain · LangGraph · FAISS · SQLite (LangGraph checkpointer) · sentence-transformers (`all-MiniLM-L6-v2`) embeddings · OpenRouter (any OpenAI-compatible chat model) · DuckDuckGo Search · Docker
-
-## Project structure
-
-```
-app/
-  config.py            # env vars, OpenRouter LLM factory, embeddings
-  state.py             # GraphState TypedDict + Pydantic grading schemas
-  llm_utils.py         # compact structured-JSON LLM call helper (graceful fallback)
-  graph.py             # LangGraph StateGraph wiring + routing functions
-  nodes/
-    retrieve.py         # FAISS top-k retrieval + chit-chat short-circuit (no LLM)
-    grade.py            # CRAG relevance grading (1 LLM call, conditional)
-    rewrite.py          # query rewriting for web search (1 LLM call, conditional)
-    search.py           # DuckDuckGo web search fallback (no LLM)
-    generate.py         # answer generation + the capped regeneration node
-    verify.py           # Self-RAG groundedness check (1 LLM call, conditional)
-    finalize.py         # appends Human/AI turn (+ source footer) to history
-  utils/
-    ingestion.py         # PDF parsing, chunking, per-thread FAISS store
-    db.py                # SQLite checkpointer + thread listing
-    heuristics.py         # regex-based chit-chat detector (no LLM)
-frontend.py             # Streamlit UI
-requirements.txt
-Dockerfile
-.dockerignore
-.env.example
+```text
+                    ┌───────────────┐
+                    │ User Question │
+                    └───────┬───────┘
+                            │
+                     PDF available?
+                      /           \
+                    No             Yes
+                    │               │
+                    ↓               ↓
+              Direct Answer      Retrieve
+                    │               │
+                    │          Grade Documents
+                    │            /       \
+                    │       Relevant     Not Relevant
+                    │          │             │
+                    │          ↓             ↓
+                    │       Generate    Rewrite Query
+                    │                        │
+                    │                        ↓
+                    │                   Web Search
+                    │                        │
+                    │                        ↓
+                    │                    Generate
+                    │                        │
+                    │                   Verify Answer
+                    │                    /         \
+                    │              Supported    Unsupported
+                    │                  │             │
+                    │                  │             ↓
+                    │                  │        Regenerate
+                    │                  │             │
+                    └──────────────────┴─────────────┘
+                                       ↓
+                                    Finalize
+                                       ↓
+                                      END
 ```
 
-## Environment variables
+---
 
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `OPENROUTER_API_KEY` | Yes | — | Your OpenRouter API key |
-| `OPENROUTER_MODEL` | No | `openai/gpt-oss-20b:free` | Any OpenRouter-compatible chat model |
-| `RAG_TOP_K` | No | `4` | FAISS retrieval count |
-| `CHUNK_SIZE` | No | `800` | PDF chunk size (characters) |
-| `CHUNK_OVERLAP` | No | `120` | PDF chunk overlap |
-| `WEB_SEARCH_RESULTS` | No | `3` | Max web results per fallback search |
-| `CHATBOT_DB_PATH` | No | `chatbot.db` | SQLite checkpoint DB path |
-| `EMBEDDING_MODEL` | No | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace embedding model |
+# 🧠 CRAG Workflow
 
-Copy `.env.example` to `.env` and fill in your key.
+**Corrective Retrieval-Augmented Generation (CRAG)** improves a normal RAG pipeline by evaluating whether the retrieved documents are actually useful.
 
-## Local execution
+The workflow is:
+
+```text
+Question
+   ↓
+FAISS Retrieval
+   ↓
+Document Relevance Grading
+   ↓
+ ┌───────────────┐
+ │               │
+Relevant      Not Relevant
+ │               │
+ ↓               ↓
+Generate      Rewrite Query
+                 ↓
+             Web Search
+                 ↓
+              Generate
+```
+
+If the retrieved PDF content is relevant, the answer is generated using the document context.
+
+If the retrieved content is not relevant, the question is rewritten and the system can use web search as a fallback.
+
+---
+
+# ✅ Self-RAG Verification
+
+After generating an answer from retrieved context, the system performs an additional verification step.
+
+```text
+Generated Answer
+       ↓
+Context Available?
+       ↓
+   Verification
+       ↓
+ ┌───────────────┐
+ │               │
+Supported    Unsupported
+ │               │
+ ↓               ↓
+Finalize      Regenerate
+                 ↓
+              Finalize
+```
+
+The verification step checks whether the generated answer is supported by the available context.
+
+This helps reduce unsupported statements and hallucination when answering questions based on retrieved documents.
+
+---
+
+# 📄 PDF RAG Pipeline
+
+Uploaded PDFs are processed using the following pipeline:
+
+```text
+PDF Upload
+    ↓
+PyPDFLoader
+    ↓
+Text Extraction
+    ↓
+Recursive Character Splitting
+    ↓
+Embeddings
+    ↓
+FAISS Vector Store
+    ↓
+Semantic Search
+    ↓
+Relevant Context
+```
+
+The system stores document metadata per conversation thread so that different conversations can maintain their own indexed documents.
+
+---
+
+# 🛠️ Tech Stack
+
+| Technology | Purpose |
+|------------|---------|
+| Python | Core programming language |
+| Streamlit | User interface |
+| LangChain | LLM and retrieval components |
+| LangGraph | Agent/workflow orchestration |
+| FAISS | Vector similarity search |
+| Sentence Transformers | Local text embeddings |
+| SQLite | Conversation checkpointing |
+| OpenRouter | LLM API |
+| PyPDF | PDF processing |
+| DuckDuckGo Search | Web-search fallback |
+| Pydantic | Structured data validation |
+| Docker | Containerization |
+| Git/GitHub | Version control |
+
+---
+
+# 📁 Project Structure
+
+```text
+Chatbot_LangGraph/
+│
+├── app/
+│   ├── nodes/
+│   │   ├── __init__.py
+│   │   ├── retrieve.py
+│   │   ├── grade.py
+│   │   ├── rewrite.py
+│   │   ├── search.py
+│   │   ├── generate.py
+│   │   ├── verify.py
+│   │   └── finalize.py
+│   │
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   ├── db.py
+│   │   ├── heuristics.py
+│   │   └── ingestion.py
+│   │
+│   ├── __init__.py
+│   ├── config.py
+│   ├── graph.py
+│   └── state.py
+│
+├── frontend.py
+├── Dockerfile
+├── .dockerignore
+├── .gitignore
+├── .env.example
+├── requirements.txt
+└── README.md
+```
+
+---
+
+# 🔄 LangGraph Nodes
+
+The workflow is divided into independent nodes.
+
+### `retrieve`
+
+Retrieves relevant document chunks from the FAISS vector store.
+
+### `grade_documents`
+
+Evaluates whether the retrieved documents are relevant to the user's question.
+
+### `rewrite_query`
+
+Reformulates the original question when the retrieved documents are insufficient.
+
+### `web_search`
+
+Performs a web search when the PDF context cannot adequately answer the question.
+
+### `generate`
+
+Generates the final answer using the available context.
+
+### `verify`
+
+Checks whether the generated answer is supported by the retrieved context.
+
+### `regenerate`
+
+Generates a corrected answer when verification indicates insufficient grounding.
+
+### `finalize`
+
+Prepares the final response and source information.
+
+---
+
+# 💾 Conversation Persistence
+
+LangGraph's SQLite checkpointer is used to persist conversation state.
+
+Each conversation receives a unique:
+
+```text
+thread_id
+```
+
+This allows the application to:
+
+- Maintain separate conversations
+- Restore previous conversations
+- Preserve message history
+- Store workflow checkpoints
+
+SQLite is intentionally used instead of a larger external database to keep the project lightweight.
+
+---
+
+# 🔐 Environment Variables
+
+Create a `.env` file in the project root.
+
+```env
+OPENROUTER_API_KEY=your_api_key_here
+OPENROUTER_MODEL=openrouter/free
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_DEVICE=cpu
+
+TOP_K=4
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=150
+MAX_OUTPUT_TOKENS=500
+WEB_RESULT_LIMIT=4
+```
+
+> Never commit your `.env` file or API keys to GitHub.
+
+A `.env.example` file can be used to document the required configuration without exposing secrets.
+
+---
+
+# ⚙️ Local Installation
+
+## 1. Clone the repository
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env             # then edit .env and add OPENROUTER_API_KEY
-streamlit run frontend.py
+git clone https://github.com/aryanthakur5375-coder/Chatbot_LangGraph.git
+cd Chatbot_LangGraph
 ```
 
-Open the printed local URL, upload a PDF in the sidebar, and start chatting.
+## 2. Create a virtual environment
 
-## Docker execution
+Python **3.11** is recommended for compatibility with the ML and LangChain ecosystem.
+
+### Windows
+
+```powershell
+py -3.11 -m venv venv
+```
+
+Activate it:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+```
+
+### Linux/macOS
+
+```bash
+python3.11 -m venv venv
+source venv/bin/activate
+```
+
+---
+
+# 📦 Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+# 🔑 Configure Environment
+
+Create:
+
+```text
+.env
+```
+
+and add:
+
+```env
+OPENROUTER_API_KEY=your_api_key_here
+OPENROUTER_MODEL=openrouter/free
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+Add the remaining configuration variables if required by your local setup.
+
+---
+
+# ▶️ Run the Application
+
+Start Streamlit:
+
+```bash
+python -m streamlit run frontend.py
+```
+
+The application will be available at:
+
+```text
+http://localhost:8501
+```
+
+---
+
+# 🐳 Docker
+
+The project also includes a Docker configuration for running the application in a container.
+
+## Build the image
 
 ```bash
 docker build -t ai-research-assistant .
-docker run -p 8501:8501 \
-  -e OPENROUTER_API_KEY=your_key_here \
-  -e OPENROUTER_MODEL=openai/gpt-oss-20b:free \
-  -v $(pwd)/data:/app/data \
-  ai-research-assistant
 ```
 
-No secrets are baked into the image — the API key is supplied at `docker run` time. The `-v` volume mount persists the SQLite conversation history across container restarts.
+## Run the container
 
-## Known limitations
+```bash
+docker run --rm -p 8501:8501 --env-file .env ai-research-assistant
+```
 
-- **FAISS indexes are in-memory only** (per running process), matching the original project's behavior. Restarting the app requires re-uploading PDFs; conversation history and citations embedded in past messages still persist via SQLite.
-- To minimize tokens, `generate` does **not** replay the full conversation history into the prompt — each turn is answered from the current question plus freshly retrieved/searched context only. Long multi-turn follow-ups that depend on earlier turns' phrasing may need to be asked more explicitly (e.g. "What about France's population?" instead of "What about its population?").
-- Web search failures (network errors, rate limits) degrade gracefully to an empty result set — the model then answers from general knowledge and says so if it can't ground the answer.
+Then open:
 
-## What changed from the original repo
+```text
+http://localhost:8501
+```
 
-- Replaced the single `backend.py` ReAct/tool-calling agent with an explicit CRAG + Self-RAG `StateGraph` under `app/`.
-- Kept: PDF ingestion → chunking → FAISS → retrieval pipeline, SQLite checkpointing for threads, OpenRouter as the LLM provider, and the overall Streamlit chat UX (sidebar, thread list, PDF status).
-- Removed: the generic ReAct tool-calling loop, the calculator/stock-price demo tools (out of scope for a research assistant and each an extra, unnecessary LLM-routable tool call), `torch`/`torchvision` as *direct* pins (still pulled in transitively by `sentence-transformers`, but no longer duplicated), the deprecated `duckduckgo-search` package in favor of the actively maintained `ddgs`.
-- Added: relevance grading, query rewriting, web-search fallback, groundedness verification with capped regeneration, per-turn state resets, a deterministic chit-chat short-circuit, structured Pydantic-validated LLM outputs, modular `app/` package layout, Docker/`.dockerignore`/`.env.example`.
+---
 
-## Dependencies
+# 🧪 Example Usage
 
-**Added:** `pydantic` (explicit — structured grading/verification output), `ddgs` (replaces the deprecated `duckduckgo-search`).
+### Without PDF
 
-**Removed:** `torch`, `torchvision` (as direct pins — still installed transitively via `sentence-transformers`), `duckduckgo-search` (superseded by `ddgs`), `openai` (unused directly; `langchain-openai` covers the OpenRouter client).
+Ask:
 
-## Verification performed
+```text
+What is the difference between TCP and UDP?
+```
 
-- ✅ Full `StateGraph` builds and compiles with no warnings
-- ✅ Simple greeting → single LLM call, retrieval/grading/verification all skipped
-- ✅ Relevant PDF match → grade + generate (+ verify) only, no web search triggered
-- ✅ Irrelevant PDF match → rewrite + web search fallback fires correctly, with real source URLs
-- ✅ Self-RAG correction → exactly one regeneration when the answer is flagged unsupported, no loop
-- ✅ Missing API key, malformed model JSON, and empty PDF uploads all fail gracefully with clear messages instead of crashing
-- ✅ `frontend.py` boots under Streamlit and serves successfully
-- ✅ All Python modules compile; every pinned dependency in `requirements.txt` exists on PyPI and resolves together with no conflicts
-- ⚠️ Not run in this environment: an actual `docker build` (no Docker daemon available here) and a live OpenRouter call (no network access to openrouter.ai available here). The Dockerfile and OpenRouter client code follow the same patterns validated above and should work as-is — please run `docker build -t ai-research-assistant .` and a real chat turn locally to do the final confirmation.
+The system directly generates an answer without running PDF retrieval.
 
-## CRAG / Self-RAG feature confirmation
+### With PDF
 
-| Requirement | Status |
-|---|---|
-| FAISS RAG (upload, split, embed, retrieve, source tracking) | Implemented |
-| Relevance grading (compact JSON, no LLM when docs empty) | Implemented |
-| Query rewriting (only when retrieval insufficient) | Implemented |
-| Web search fallback (only when needed, returns sources) | Implemented |
-| Self-RAG groundedness check + max-one regeneration | Implemented |
-| Skips verification for simple conversational messages | Implemented (regex chit-chat short-circuit) |
-| LangGraph StateGraph with conditional edges | Implemented |
-| OpenRouter via env vars, no hardcoded keys | Implemented |
-| SQLite checkpointing, minimal stored state | Implemented |
-| Streamlit UI: chat, upload, status, threads, citations, web indicator, reset | Implemented |
-| Docker (Dockerfile, .dockerignore, requirements.txt), no secrets in image | Implemented |
-| Graceful error handling across all specified failure modes | Implemented |
+Upload a research paper or technical document and ask:
+
+```text
+What methodology does the paper use?
+```
+
+The system:
+
+```text
+PDF
+ ↓
+Chunking
+ ↓
+Embeddings
+ ↓
+FAISS
+ ↓
+Retrieval
+ ↓
+Relevance Grading
+ ↓
+Answer Generation
+ ↓
+Verification
+ ↓
+Final Answer
+```
+
+### When the PDF is insufficient
+
+```text
+Question
+   ↓
+PDF Retrieval
+   ↓
+Low Relevance
+   ↓
+Query Rewriting
+   ↓
+Web Search
+   ↓
+Answer Generation
+```
+
+---
+
+# ⚡ Design Goals
+
+The project focuses on keeping the architecture **simple, modular, and efficient**.
+
+### Minimal LLM usage
+
+LLM calls are only performed when required by the workflow.
+
+For example:
+
+```text
+No PDF
+→ Direct generation
+
+Relevant PDF
+→ Document grading
+→ Generation
+→ Verification
+
+Irrelevant PDF
+→ Document grading
+→ Query rewriting
+→ Web search
+→ Generation
+→ Verification
+```
+
+Deterministic operations such as routing and basic checks are handled without additional LLM calls wherever possible.
+
+---
+
+# 🧩 Why LangGraph?
+
+LangGraph is used to represent the application as a controllable state machine.
+
+Instead of a simple linear pipeline:
+
+```text
+Input → Retrieval → LLM → Output
+```
+
+the application can make decisions:
+
+```text
+Input
+ ↓
+Is PDF available?
+ ↓
+Retrieve
+ ↓
+Are documents relevant?
+ ├── Yes → Generate
+ └── No  → Rewrite → Web Search → Generate
+                         ↓
+                     Verify
+                         ↓
+                  Regenerate if needed
+```
+
+This makes the workflow easier to extend and debug.
+
+---
+
+# 🔎 Why FAISS?
+
+FAISS is used for efficient vector similarity search.
+
+It allows the application to find document chunks that are semantically related to a user's question rather than relying only on exact keyword matching.
+
+---
+
+# 🗄️ Why SQLite?
+
+SQLite is used for lightweight persistent checkpoint storage.
+
+It provides conversation persistence without requiring an external database server.
+
+This keeps the application easy to run locally and inside Docker.
+
+---
+
+# 🔒 Security
+
+The project follows basic secret-management practices:
+
+- API keys are stored in `.env`
+- `.env` is excluded through `.gitignore`
+- `.env` is excluded from Docker builds
+- No API keys are hard-coded into the source code
+
+---
+
+# 📌 Future Improvements
+
+Possible future improvements include:
+
+- Streaming token-by-token responses
+- Better source citation formatting
+- Multiple PDF support
+- Persistent vector-store management
+- Authentication
+- PostgreSQL-backed persistence
+- More advanced answer evaluation
+- Automated testing
+- GitHub Actions CI/CD
+- Docker Hub deployment
+- Observability and tracing
+- Additional LLM providers
+
+---
+
+# 👨‍💻 Author
+
+**Aryan Thakur**
+
+Computer Science & Engineering  
+JECRC Foundation
+
+### Technologies
+
+```text
+Python • LangChain • LangGraph • FAISS • Streamlit
+OpenRouter • SQLite • Docker • Git
+```
+
+---
+
+# ⭐ Project Highlights
+
+This project demonstrates practical implementation of:
+
+- Retrieval-Augmented Generation (RAG)
+- Corrective RAG (CRAG)
+- Self-RAG concepts
+- Agent/workflow orchestration
+- Vector databases
+- Semantic search
+- LLM integration
+- Structured state management
+- Persistent conversations
+- Web-search fallback
+- Docker containerization
+- Modular Python application architecture
+
+If you find the project useful, consider giving it a ⭐ on GitHub.
